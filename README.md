@@ -2,9 +2,6 @@
 Asistencia externa al cuerpo tecnico del Dingnan United. PF: Emanuel Bale - Transfermarkt: https://www.transfermarkt.com/emanuel-bale/profil/trainer/155367
 Scraper + análisis del **Dingnan United** en la **China League One**, construido con datos de la API de [Sofascore](https://www.sofascore.com/).
 
-> La China League One **no está soportada** por las funciones de ScraperFC, así que el scrapeo se hace partido a partido.
-# Lo que uso
-
 ```text
 analisis.py  →  scrape partido a partido (stats por jugador)
 scrape_liga.py  →  re-scrape resumible de toda la liga
