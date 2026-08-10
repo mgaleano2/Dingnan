@@ -1,10 +1,9 @@
 # Dingnan United · Análisis (China League One)
+Asistencia externa al cuerpo tecnico del Dingnan United. PF: Emanuel Bale - Transfermarkt: https://www.transfermarkt.com/emanuel-bale/profil/trainer/155367
+Scraper + análisis del **Dingnan United** en la **China League One**, construido con datos de la API de [Sofascore](https://www.sofascore.com/).
 
-Scraper + pipeline de análisis de **Jiangxi Dingnan United** en la **China League One**, construido con datos de la API de [Sofascore](https://www.sofascore.com/).
-
-> La China League One **no está soportada** por las funciones de alto nivel de ScraperFC, así que el scrapeo se hace partido a partido contra el endpoint de stats de Sofascore (con el helper `botasaurus_browser_get_json`, que sortea el bloqueo de Cloudflare).
-
-## Pipeline
+> La China League One **no está soportada** por las funciones de ScraperFC, así que el scrapeo se hace partido a partido.
+# Lo que uso
 
 ```text
 analisis.py  →  scrape partido a partido (stats por jugador)
@@ -14,21 +13,20 @@ consolidado.py  →  carga, limpieza y reportes (per-90, tablas, markdown)
 
 ### `analisis.py`
 Entrada del scraping: define los partidos de Dingnan y guarda las stats por jugador de cada uno en `data/stats_{match_id}.csv`.
+Voy introduciendo manualmente cada ID, en el codigo.
 
 ### `scrape_liga.py`
 Scraper **resumible y tolerante a fallos**:
 - Omite los partidos cuyo CSV ya existe (idempotente, se puede cortar y retomar).
 - Cada partido envuelto en `try/except`: ante un error registra `ERROR <mid>: <tipo>: <mensaje>` y sigue con el siguiente.
 - `time.sleep(1)` entre partidos para no saturar la API.
-
+- Utilizacion de OpenCode + Claude Code, para mejoras del codigo.
 ### `consolidado.py`
 Cálculo del análisis. Flujo `cargar → limpiar → tabla_partidos → tabla_jugadores → reporte → reporte_md`:
 
 - Agregaciones con `groupby().agg()` (named aggregations) por partido y por jugador.
 - Métricas normalizadas **por 90 minutos** con guarda de división por cero.
-- **Corrección de calidad de datos**: la API devolvió un xG inválido (142.0) en un partido; se descarta y se documenta en el propio reporte.
-- Se excluyen jugadores con un solo partido (muestra insuficiente).
-- El reporte incluye advertencia explícita: la muestra es chica (6 partidos) y debe leerse como señal, no como conclusión.
+- Utilizacion de OpenCode + Claude Code, para mejoras del codigo.
 
 ## Salidas (`data/`)
 
@@ -44,15 +42,12 @@ Cálculo del análisis. Flujo `cargar → limpiar → tabla_partidos → tabla_j
 
 ```bash
 # Python 3.10+ con pandas y ScraperFC instalados
-python -u analisis.py        # scrapea los partidos definidos
-python -u scrape_liga.py     # opcional: completa partidos faltantes (resumible)
-python -u consolidado.py     # genera tablas y reporte
+python analisis.py        # scrapea los partidos definidos
+python scrape_liga.py     # opcional: completa partidos faltantes (resumible)
+python consolidado.py     # genera tablas y reporte
 ```
 
 ## Dependencia
 
 Se usa la librería [ScraperFC](https://github.com/oseymour/ScraperFC) (paquete Python para scraping de datos de fútbol); este proyecto se desarrolló sobre un **fork propio**: [mgaleano2/ScraperFC](https://github.com/mgaleano2/ScraperFC).
 
-## Fuente
-
-[Sofascore](https://www.sofascore.com/) · API pública (no oficial).
