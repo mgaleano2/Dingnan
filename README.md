@@ -49,6 +49,10 @@ python -u scrape_liga.py     # opcional: completa partidos faltantes (resumible)
 python -u consolidado.py     # genera tablas y reporte
 ```
 
+## Dependencia
+
+Se usa la librería [ScraperFC](https://github.com/oseymour/ScraperFC) (paquete Python para scraping de datos de fútbol); este proyecto se desarrolló sobre un **fork propio**: [mgaleano2/ScraperFC](https://github.com/mgaleano2/ScraperFC).
+
 ## Fuente
 
 [Sofascore](https://www.sofascore.com/) · API pública (no oficial).
