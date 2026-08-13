@@ -1,6 +1,10 @@
 # Dingnan United · Análisis (China League One)
-Asistencia externa al cuerpo tecnico del Dingnan United. PF: Emanuel Bale - Transfermarkt: https://www.transfermarkt.com/emanuel-bale/profil/trainer/155367
+Asistencia externa al cuerpo tecnico del Dingnan United. PF: Emanuel Bale 
 Scraper + análisis del **Dingnan United** en la **China League One**, construido con datos de la API de [Sofascore](https://www.sofascore.com/).
+
+Puedes probar online:
+
+https://dingnan-league-one.streamlit.app/
 
 ```text
 analisis.py  →  scrape partido a partido (stats por jugador)
