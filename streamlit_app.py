@@ -269,6 +269,8 @@ def guardar_meta(mid: int, md: dict | None):
         "home": md.get("homeTeam", {}).get("name"),
         "away": md.get("awayTeam", {}).get("name"),
         "round": (md.get("roundInfo") or {}).get("round"),
+        "homeScore": (md.get("homeScore") or {}).get("current"),
+        "awayScore": (md.get("awayScore") or {}).get("current"),
     }
     try:
         with open(pm, "w") as f:
@@ -335,6 +337,7 @@ def render_header(mid: int, md: dict | None, df: pd.DataFrame):
     else:
         dm = cargar_meta().get(str(mid), {})
         home, away = dm.get("home"), dm.get("away")
+        hs, as_ = dm.get("homeScore"), dm.get("awayScore")
         jornada = dm.get("round")
         if not (home and away):
             equipos = sorted(df["teamName"].dropna().unique()) if "teamName" in df.columns else []
