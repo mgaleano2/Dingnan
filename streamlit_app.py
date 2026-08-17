@@ -3,31 +3,25 @@ import glob
 import json
 import os
 import re
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-
 try:
     from ScraperFC.sofascore import Sofascore
 except ImportError:
     Sofascore = None
-
 st.set_page_config(
     page_title="Dingnan United · Análisis (China League 1)",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 DATA_DIR = "data"
 LIGA_CSV = f"{DATA_DIR}/top_jugadores_liga.csv"
 TEAM_DINGNAN = "Jiangxi Dingnan United"
 YEAR = "2026"
-
 POS_CORTO = {"G": "POR", "D": "DEF", "M": "MED", "F": "DEL"}
-
 # ======================
 # LIGA UNO (tablero existente)
 # ======================
@@ -47,14 +41,12 @@ RENOMBRES = {
     "yellowCards": "Amarillas", "redCards": "Rojas", "ownGoals": "Autogoles",
     "Edad": "Edad", "Altura": "Altura", "Pie": "Pie", "País": "País", "Valor": "Valor",
 }
-
 PER90 = ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists",
          "totalShots", "shotsOnTarget", "keyPasses", "successfulDribbles",
          "tackles", "interceptions", "ballRecovery", "totalDuelsWon",
          "wasFouled", "fouls", "yellowCards", "redCards"]
 for c in PER90:
     RENOMBRES[f"{c}_per90"] = f"{RENOMBRES[c]} /90"
-
 COLUMNAS_GRUPOS = {
     "Básicas": ["player", "team", "posicion", "Edad", "rating", "minutesPlayed", "appearances"],
     "Ataque": ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists", "penaltyGoals"],
@@ -66,11 +58,9 @@ COLUMNAS_GRUPOS = {
     "Detalles": ["Altura", "Pie", "País", "Valor"],
     "Por 90": [f"{c}_per90" for c in PER90],
 }
-
 ORDENES = ["rating", "goals", "goals_per90", "expectedGoals", "expectedGoals_per90",
            "assists", "keyPasses", "minutesPlayed", "appearances", "totalShots",
            "successfulDribbles", "tackles", "ballRecovery", "Edad"]
-
 # ======================
 # PARTIDO (mapeos nuevos)
 # ======================
@@ -120,7 +110,6 @@ MATCH_RENOMBRES = {
     # duelos
     "totalContest": "Duelos totales",
 }
-
 MATCH_ORDEN = [
     "name", "position", "shirtNumber", "jerseyNumber", "substitute",
     "minutesPlayed", "rating", "captain", "teamName",
@@ -144,7 +133,6 @@ MATCH_ORDEN = [
     "savedShotsFromInsideTheBox", "penaltyFaced", "penaltyConceded",
     "errorLeadToAGoal",
 ]
-
 COLUMNAS_JUNK = {
     "firstName", "lastName", "slug", "shortName", "userCount", "gender",
     "sofascoreId", "country", "id", "marketValueCurrency", "fieldTranslations",
@@ -153,7 +141,6 @@ COLUMNAS_JUNK = {
     "passValueNormalized", "defensiveValueNormalized", "dribbleValueNormalized",
     "shotValueNormalized", "keeperSaveValue", "goalkeeperValueNormalized", "match_id",
 }
-
 # ======================
 # HELPERS
 # ======================
@@ -170,15 +157,11 @@ def normalizar_partido(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[col] = df[col].astype(str).replace({"True": "Sí", "False": "No", "nan": ""})
     return df
-
-
 def ruta_partido_csv(mid: int) -> str | None:
     for p in (f"{DATA_DIR}/partidos/match_{mid}.csv", f"{DATA_DIR}/stats_{mid}.csv"):
         if os.path.exists(p):
             return p
     return None
-
-
 def parsear_match_id(texto: str) -> int:
     texto = texto.strip()
     if texto.isdigit():
@@ -190,16 +173,12 @@ def parsear_match_id(texto: str) -> int:
     if m:
         return int(m.group(1))
     raise ValueError("No se pudo extraer el ID del partido del texto ingresado.")
-
-
 @st.cache_data(show_spinner=False)
 def cargar_partido_csv(mid: int):
     p = ruta_partido_csv(mid)
     if not p:
         return None
     return normalizar_partido(pd.read_csv(p))
-
-
 def cargar_meta() -> dict:
     pm = f"{DATA_DIR}/.partidos_meta.json"
     if os.path.exists(pm):
@@ -209,11 +188,8 @@ def cargar_meta() -> dict:
         except Exception:
             pass
     return {}
-
-
 def partidos_guardados() -> list[dict]:
     meta = cargar_meta()
-
     res: dict[int, str] = {}
     archivos = sorted(glob.glob(f"{DATA_DIR}/stats_*.csv")) + sorted(glob.glob(f"{DATA_DIR}/partidos/match_*.csv"))
     for p in archivos:
@@ -227,7 +203,6 @@ def partidos_guardados() -> list[dict]:
             df = pd.read_csv(p, nrows=200)
         except Exception:
             continue
-
         dm = meta.get(str(mid), {})
         if TEAM_DINGNAN in (dm.get("home"), dm.get("away")):
             rival = dm.get("away") if dm.get("home") == TEAM_DINGNAN else dm.get("home")
@@ -246,7 +221,6 @@ def partidos_guardados() -> list[dict]:
                 texto = f"Partido {mid}"
         else:
             texto = f"Partido {mid}"
-
         jornada = dm.get("round")
         if jornada is None and "round" in df.columns and df["round"].notna().any():
             jornada = df["round"].dropna().iloc[0]
@@ -257,8 +231,6 @@ def partidos_guardados() -> list[dict]:
                 texto += f" · Jornada {jornada}"
         res[mid] = f"{texto} (id {mid})"
     return [{"mid": mid, "label": label} for mid, label in sorted(res.items(), key=lambda x: -x[0])]
-
-
 def guardar_meta(mid: int, md: dict | None):
     if not md:
         return
@@ -279,8 +251,6 @@ def guardar_meta(mid: int, md: dict | None):
             json.dump(cache, f, ensure_ascii=False)
     except Exception:
         pass
-
-
 @st.cache_data(show_spinner=False, ttl=3600)
 def info_partido_live(mid: int):
     if Sofascore is None:
@@ -289,24 +259,18 @@ def info_partido_live(mid: int):
         return Sofascore().get_match_dict(mid)
     except Exception:
         return None
-
-
 @st.cache_data(show_spinner=False, ttl=3600)
 def partido_live(mid: int) -> pd.DataFrame:
     if Sofascore is None:
         raise RuntimeError("El scraping en vivo requiere ScraperFC (solo disponible localmente)")
     df = Sofascore().scrape_player_match_stats(mid)
     return normalizar_partido(df)
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
 def cargar_liga() -> pd.DataFrame:
     df = pd.read_csv(LIGA_CSV)
     df["player id"] = df["player id"].astype(str)
     df["team id"] = df["team id"].astype(str)
     return df
-
-
 @st.cache_data(ttl=86400, show_spinner=False)
 def foto_jugador(player_id: int) -> bytes | None:
     """Foto del jugador desde la API pública de Sofascore. Cacheada 24hs para
@@ -317,8 +281,6 @@ def foto_jugador(player_id: int) -> bytes | None:
         return r.content if r.status_code == 200 else None
     except Exception:
         return None
-
-
 def config_columnas(vista: pd.DataFrame) -> dict:
     config = {}
     for c in vista.columns:
@@ -329,8 +291,6 @@ def config_columnas(vista: pd.DataFrame) -> dict:
             enteros = (v % 1 == 0).all()
             config[c] = st.column_config.NumberColumn(format="%d" if enteros else "%.2f")
     return config
-
-
 # ======================
 # RENDER PARTIDO
 # ======================
@@ -360,7 +320,6 @@ def render_header(mid: int, md: dict | None, df: pd.DataFrame):
         if jornada is None and "round" in df.columns:
             jornada = df["round"].iloc[0]
         torneo = fecha = estado = None
-
     c1, cs, c2 = st.columns([1, 0.4, 1], vertical_alignment="center")
     c1.markdown(f"### {home or '—'}")
     marcador = f"{hs} - {as_}" if hs is not None else "vs"
@@ -369,7 +328,6 @@ def render_header(mid: int, md: dict | None, df: pd.DataFrame):
         unsafe_allow_html=True,
     )
     c2.markdown(f"### {away or '—'}")
-
     partes = []
     if jornada:
         partes.append(f"Jornada {jornada}")
@@ -381,15 +339,12 @@ def render_header(mid: int, md: dict | None, df: pd.DataFrame):
         partes.append(estado)
     if partes:
         st.caption("  ·  ".join(partes))
-
-
 def render_partido():
     st.markdown("## ⚽ Análisis por partido")
     st.caption(
         "Elegí un partido guardado en `data/` o cargá otro por **ID** / **URL de Sofascore**. "
         "Se muestra la información general y el reporte individual por equipo."
     )
-
     guardados = partidos_guardados()
     OTRO = "✍️ Otro partido (por ID/URL)"
     if guardados:
@@ -422,15 +377,12 @@ def render_partido():
                 st.session_state["mid"] = parsear_match_id(raw)
             except ValueError as e:
                 st.error(str(e))
-
     mid = st.session_state.get("mid")
     if not mid:
         st.info("Elegí un partido guardado arriba o escribí un ID de partido.")
         return
-
     df = cargar_partido_csv(mid)
     md = None
-
     if df is None:
         col1, col2 = st.columns([3, 1])
         col1.warning(
@@ -452,15 +404,11 @@ def render_partido():
     else:
         with st.spinner("Buscando información general del partido..."):
             md = info_partido_live(mid)
-
     if df is None or df.empty:
         st.stop()
-
     guardar_meta(mid, md)
     render_header(mid, md, df)
-
     st.divider()
-
     # ---- reporte individual por equipo ----
     if "teamName" in df.columns:
         equipos = sorted(df["teamName"].dropna().unique())
@@ -470,18 +418,14 @@ def render_partido():
     opciones = ["Todos"] + equipos
     seleccion = st.radio("Equipo", opciones, index=opciones.index(default) if default in opciones else 0,
                          horizontal=True)
-
     sub = df if seleccion == "Todos" else df[df["teamName"] == seleccion]
-
     orden_col = "minutesPlayed" if "minutesPlayed" in sub.columns else "rating"
     sub = sub.sort_values([orden_col, "rating"], ascending=[False, False], na_position="last")
     cols = [c for c in MATCH_ORDEN if c in sub.columns]
     cols += [c for c in sub.columns if c not in MATCH_ORDEN and c not in COLUMNAS_JUNK]
     vista = sub[cols].rename(columns=MATCH_RENOMBRES)
-
     st.markdown(f"**{len(sub)}** jugadores" + (f" · {seleccion}" if seleccion != "Todos" else ""))
     config = config_columnas(vista)
-
     st.dataframe(vista, width="stretch", height=460, column_config=config)
     st.download_button(
         "⬇️ Descargar CSV del partido",
@@ -489,15 +433,12 @@ def render_partido():
         file_name=f"partido_{mid}.csv",
         mime="text/csv",
     )
-
-
 # ======================
 # RENDER LIGA UNO
 # ======================
 def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
                 rating_min, orden_col, ascendente, grupos_sel):
     df = cargar_liga()
-
     filtro = (
         df["posicion"].isin(posiciones)
         & df["team"].isin(equipos)
@@ -509,14 +450,11 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
         filtro &= df["País"].isin(paises)
     if pie:
         filtro &= df["Pie"].isin(pie)
-
     filtrado = df[filtro].copy()
     if filtrado.empty:
         st.warning("No hay jugadores que cumplan los filtros.")
         st.stop()
-
     filtrado = filtrado.sort_values(orden_col, ascending=ascendente, na_position="last")
-
     st.markdown("## 🏆 Liga Uno · Top jugadores")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Jugadores", f"{len(filtrado):,}")
@@ -524,25 +462,18 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
     c3.metric("Goles totales", f"{filtrado['goals'].sum():,.0f}")
     mejor = filtrado.loc[filtrado["rating"].idxmax()]
     c4.metric("Mejor rating", f"{mejor['rating']:.2f}", f"{mejor['player']}")
-
     tab_tabla, tab_graficos, tab_ficha = st.tabs(["📋 Tabla", "📊 Gráficos", "👤 Ficha de jugador"])
-
     with tab_tabla:
         cols = []
         for g in grupos_sel:
             cols += [c for c in COLUMNAS_GRUPOS[g] if c in filtrado.columns]
         cols = list(dict.fromkeys(cols))
-
         vista = filtrado[cols].rename(columns=RENOMBRES)
-
         config = config_columnas(vista)
-
         st.dataframe(vista, width="stretch", height=520, column_config=config)
-
         csv = vista.to_csv(index=False).encode("utf-8-sig")
         st.download_button("⬇️ Descargar CSV", data=csv, file_name="top_jugadores_filtrado.csv",
                            mime="text/csv")
-
     with tab_graficos:
         g1, g2 = st.columns(2)
         with g1:
@@ -559,7 +490,6 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
                          labels={"rating": "Rating", "player": ""}, title="Top 10 rating")
             fig.update_layout(yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, width="stretch")
-
         g3, g4 = st.columns(2)
         with g3:
             fig = px.scatter(filtrado, x="goals", y="assists", color="posicion",
@@ -571,7 +501,6 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
             fig = px.histogram(filtrado, x="Edad", nbins=20, color_discrete_sequence=["#0ea5e9"],
                                labels={"Edad": "Edad"}, title="Distribución de edad")
             st.plotly_chart(fig, width="stretch")
-
     with tab_ficha:
         jugador = st.selectbox("Seleccionar jugador", filtrado["player"].unique())
         p = filtrado[filtrado["player"] == jugador].iloc[0]
@@ -632,8 +561,6 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
             height=420,
         )
         st.plotly_chart(fig, width="stretch")
-
-
 # ======================
 # APP
 # ======================
@@ -642,7 +569,6 @@ with st.sidebar:
     st.caption(f"China League 1 · Temporada {YEAR} · Sofascore")
     seccion = st.radio("Sección", ["⚽ Análisis por partido", "🏆 Liga Uno"])
     st.divider()
-
     if seccion == "🏆 Liga Uno":
         df_liga = cargar_liga()
         posiciones = st.multiselect("Posición", sorted(df_liga["posicion"].dropna().unique()),
@@ -651,22 +577,18 @@ with st.sidebar:
                                  default=sorted(df_liga["team"].unique()))
         paises = st.multiselect("País", sorted(df_liga["País"].dropna().unique()), default=[])
         pie = st.multiselect("Pie", sorted(df_liga["Pie"].dropna().unique()), default=[])
-
         edad_min, edad_max = int(df_liga["Edad"].min()), int(df_liga["Edad"].max())
         rango_edad = st.slider("Edad", edad_min, edad_max, (edad_min, edad_max))
         rango_min = st.slider("Minutos mínimos", 0, int(df_liga["minutesPlayed"].max()), 300)
         rating_min = st.slider("Rating mínimo", 0.0, 10.0, 0.0, 0.1)
-
         st.divider()
         orden_col = st.selectbox("Ordenar por", ORDENES, format_func=lambda c: RENOMBRES[c])
         ascendente = st.checkbox("Ascendente", value=False)
-
         grupos_sel = st.multiselect("Columnas a mostrar", list(COLUMNAS_GRUPOS),
                                     default=["Básicas", "Ataque", "Tiros", "Creación", "Por 90"])
     else:
         st.caption("Pegá el ID del partido en el área principal.")
-
-if seccion == "Análisis por partido":
+if seccion == "⚽ Análisis por partido":
     render_partido()
 else:
     render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
