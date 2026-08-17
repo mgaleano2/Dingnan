@@ -6,6 +6,8 @@ import re
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
+import requests
 import streamlit as st
 
 try:
@@ -305,6 +307,18 @@ def cargar_liga() -> pd.DataFrame:
     return df
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def foto_jugador(player_id: int) -> bytes | None:
+    """Foto del jugador desde la API pública de Sofascore. Cacheada 24hs para
+    no golpear la API en cada rerender de Streamlit. Devuelve None si falla
+    o si el jugador no tiene foto cargada."""
+    try:
+        r = requests.get(f"https://api.sofascore.com/api/v1/player/{player_id}/image", timeout=5)
+        return r.content if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
 def config_columnas(vista: pd.DataFrame) -> dict:
     config = {}
     for c in vista.columns:
@@ -562,6 +576,27 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
         jugador = st.selectbox("Seleccionar jugador", filtrado["player"].unique())
         p = filtrado[filtrado["player"] == jugador].iloc[0]
 
+        # ---- header: foto + datos básicos ----
+        col_foto, col_info = st.columns([1, 3])
+        with col_foto:
+            img = foto_jugador(int(p["player id"]))
+            if img:
+                st.image(img, width=110)
+            else:
+                st.markdown(
+                    f"<div style='width:96px;height:96px;border-radius:50%;background:#e6f1fb;"
+                    f"display:flex;align-items:center;justify-content:center;font-size:28px;"
+                    f"font-weight:500;color:#0c447c'>{jugador[0]}</div>",
+                    unsafe_allow_html=True,
+                )
+        with col_info:
+            st.markdown(f"### {p['player']}")
+            st.caption(
+                f"{p['team']} · {p['posicion']} · "
+                f"{p['Edad']:.0f} años · {p['Altura']:.0f} cm · "
+                f"{p['Pie'] if pd.notna(p['Pie']) else '—'}"
+            )
+
         f1, f2, f3, f4, f5, f6 = st.columns(6)
         f1.metric("Rating", f"{p['rating']:.2f}")
         f2.metric("Goles", f"{p['goals']:.0f}")
@@ -570,22 +605,32 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
         f5.metric("Minutos", f"{p['minutesPlayed']:.0f}")
         f6.metric("Valor", p["Valor"] if pd.notna(p["Valor"]) else "—")
 
-        st.markdown(f"**{p['player']}** · {p['team']} · {p['posicion']} · "
-                    f"{p['Edad']:.0f} años · {p['Altura']:.0f} cm · {p['Pie'] if pd.notna(p['Pie']) else '—'}")
+        st.divider()
 
+        # ---- radar: jugador vs promedio de liga ----
         ficha_metricas = ["expectedGoals_per90", "expectedAssists_per90", "keyPasses_per90",
                           "successfulDribbles_per90", "tackles_per90", "interceptions_per90",
-                          "ballRecovery_per90", "yellowCards_per90"]
-        comp = pd.DataFrame({
-            "Métrica": [RENOMBRES[c] for c in ficha_metricas],
-            "Jugador": [p[c] for c in ficha_metricas],
-            "Promedio liga": [df[c].mean() for c in ficha_metricas],
-        }).melt(id_vars="Métrica", var_name="Referencia", value_name="Valor")
+                          "ballRecovery_per90"]
+        valores_jugador = [p[c] for c in ficha_metricas]
+        valores_liga = [df[c].mean() for c in ficha_metricas]
+        etiquetas = [RENOMBRES[c] for c in ficha_metricas]
 
-        fig = px.bar(comp, x="Valor", y="Métrica", color="Referencia", barmode="group",
-                     title="Jugador vs promedio de la liga (por 90)",
-                     labels={"Valor": "Por 90", "Métrica": ""})
-        fig.update_layout(height=420)
+        fig = go.Figure()
+        fig.add_trace(go.Scatterpolar(
+            r=valores_jugador, theta=etiquetas, fill="toself",
+            name=p["player"], line_color="#2a78d6",
+        ))
+        fig.add_trace(go.Scatterpolar(
+            r=valores_liga, theta=etiquetas, fill="toself",
+            name="Promedio liga", line_color="#898781", line_dash="dot",
+            opacity=0.6,
+        ))
+        fig.update_layout(
+            polar=dict(radialaxis=dict(visible=True, showticklabels=False)),
+            showlegend=True,
+            title="Jugador vs promedio de la liga (por 90)",
+            height=420,
+        )
         st.plotly_chart(fig, width="stretch")
 
 
@@ -621,7 +666,7 @@ with st.sidebar:
     else:
         st.caption("Pegá el ID del partido en el área principal.")
 
-if seccion == "⚽ Análisis por partido":
+if seccion == "Análisis por partido":
     render_partido()
 else:
     render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
