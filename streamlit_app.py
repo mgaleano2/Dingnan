@@ -39,7 +39,7 @@ RENOMBRES = {
     "totalDuelsWon": "Duelos ganados", "duelLost": "Duelos perdidos",
     "wasFouled": "Faltas recibidas", "fouls": "Faltas",
     "yellowCards": "Amarillas", "redCards": "Rojas", "ownGoals": "Autogoles",
-    "Edad": "Edad", "Altura": "Altura", "Pie": "Pie", "País": "País", "Valor": "Valor",
+    "Edad": "Edad",
 }
 PER90 = ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists",
          "totalShots", "shotsOnTarget", "keyPasses", "successfulDribbles",
@@ -55,7 +55,6 @@ COLUMNAS_GRUPOS = {
     "Pases": ["totalPasses", "accuratePassesPercentage"],
     "Defensa": ["tackles", "interceptions", "ballRecovery", "clearances", "blockedShots", "totalDuelsWon", "duelLost"],
     "Disciplina": ["yellowCards", "redCards", "fouls", "wasFouled", "ownGoals"],
-    "Detalles": ["Altura", "Pie", "País", "Valor"],
     "Por 90": [f"{c}_per90" for c in PER90],
 }
 ORDENES = ["rating", "goals", "goals_per90", "expectedGoals", "expectedGoals_per90",
@@ -520,19 +519,25 @@ def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
                 )
         with col_info:
             st.markdown(f"### {p['player']}")
-            st.caption(
-                f"{p['team']} · {p['posicion']} · "
-                f"{p['Edad']:.0f} años · {p['Altura']:.0f} cm · "
-                f"{p['Pie'] if pd.notna(p['Pie']) else '—'}"
-            )
+            detalle = f"{p['team']} · {p['posicion']} · {p['Edad']:.0f} años"
+            if "Altura" in p.index:
+                detalle += f" · {p['Altura']:.0f} cm"
+            if "Pie" in p.index and pd.notna(p["Pie"]):
+                detalle += f" · {p['Pie']}"
+            st.caption(detalle)
 
-        f1, f2, f3, f4, f5, f6 = st.columns(6)
-        f1.metric("Rating", f"{p['rating']:.2f}")
-        f2.metric("Goles", f"{p['goals']:.0f}")
-        f3.metric("Goles /90", f"{p['goals_per90']:.2f}")
-        f4.metric("Asistencias", f"{p['assists']:.0f}")
-        f5.metric("Minutos", f"{p['minutesPlayed']:.0f}")
-        f6.metric("Valor", p["Valor"] if pd.notna(p["Valor"]) else "—")
+        metricas_ficha = [
+            ("Rating", f"{p['rating']:.2f}"),
+            ("Goles", f"{p['goals']:.0f}"),
+            ("Goles /90", f"{p['goals_per90']:.2f}"),
+            ("Asistencias", f"{p['assists']:.0f}"),
+            ("Minutos", f"{p['minutesPlayed']:.0f}"),
+        ]
+        if "Valor" in p.index and pd.notna(p["Valor"]):
+            metricas_ficha.append(("Valor", p["Valor"]))
+        cols_ficha = st.columns(len(metricas_ficha))
+        for col, (lbl, val) in zip(cols_ficha, metricas_ficha):
+            col.metric(lbl, val)
 
         st.divider()
 
@@ -575,8 +580,8 @@ with st.sidebar:
                                     default=sorted(df_liga["posicion"].dropna().unique()))
         equipos = st.multiselect("Equipo", sorted(df_liga["team"].unique()),
                                  default=sorted(df_liga["team"].unique()))
-        paises = st.multiselect("País", sorted(df_liga["País"].dropna().unique()), default=[])
-        pie = st.multiselect("Pie", sorted(df_liga["Pie"].dropna().unique()), default=[])
+        paises = st.multiselect("País", sorted(df_liga["País"].dropna().unique()), default=[]) if "País" in df_liga.columns else []
+        pie = st.multiselect("Pie", sorted(df_liga["Pie"].dropna().unique()), default=[]) if "Pie" in df_liga.columns else []
         edad_min, edad_max = int(df_liga["Edad"].min()), int(df_liga["Edad"].max())
         rango_edad = st.slider("Edad", edad_min, edad_max, (edad_min, edad_max))
         rango_min = st.slider("Minutos mínimos", 0, int(df_liga["minutesPlayed"].max()), 300)
