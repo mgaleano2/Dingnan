@@ -10,7 +10,8 @@ MATCHES = [
     (15657877, "Ningbo FC"),
     (15657868, "Shenzhen Juniors"),
     (15657854, "Yanbian Longding"),
-    (15657898, "Dalian Kuncheng City")
+    (15657898, "Dalian Kuncheng City"),
+    (15657909, "Nanjing")
 ]
 
 def partidos():
@@ -38,7 +39,7 @@ COLUMNAS = [
 ]
 
 def individual():
-    partido = 15657898  # vs Yanbian
+    partido = 15657909  # vs Nanjing
     df = s.scrape_player_match_stats(partido)  # para partidos s.get_match_dict
     df = df[df["teamName"] == "Jiangxi Dingnan United"]
     df = df.loc[:, ~df.columns.duplicated()]
@@ -47,7 +48,7 @@ def individual():
     df = df.sort_values("minutesPlayed", ascending=False)
     df["match_id"] = partido
     print(df.to_string(index=False))
-    df.to_csv("data/stats_15657898.csv", index=False)
+    df.to_csv("data/stats_15657909.csv", index=False)
 
 if __name__ == "__main__":
     #    partidos()
