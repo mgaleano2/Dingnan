@@ -1,30 +1,16 @@
-import datetime as dt
-import glob
-import json
-import os
-import re
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-import requests
+import plotly.express as px
 import streamlit as st
-try:
-    from ScraperFC.sofascore import Sofascore
-except ImportError:
-    Sofascore = None
-st.set_page_config(
-    page_title="Dingnan United · Análisis (China League 1)",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-DATA_DIR = "data"
-LIGA_CSV = f"{DATA_DIR}/top_jugadores_liga.csv"
-TEAM_DINGNAN = "Jiangxi Dingnan United"
-YEAR = "2026"
-POS_CORTO = {"G": "POR", "D": "DEF", "M": "MED", "F": "DEL"}
-# ======================
-# LIGA UNO (tablero existente)
-# ======================
+import requests
+import base64
+
+st.set_page_config(page_title="China League 1 · Scouting", layout="wide",
+                    initial_sidebar_state="expanded", page_icon="⚽")
+
+# ============================================================
+# CONSTANTES / RENOMBRES
+# ============================================================
 RENOMBRES = {
     "player": "Jugador", "team": "Equipo", "posicion": "Posición",
     "appearances": "Partidos", "minutesPlayed": "Minutos", "rating": "Rating",
@@ -40,561 +26,601 @@ RENOMBRES = {
     "wasFouled": "Faltas recibidas", "fouls": "Faltas",
     "yellowCards": "Amarillas", "redCards": "Rojas", "ownGoals": "Autogoles",
     "Edad": "Edad",
+    "pct_conversion": "% conversión", "pct_duelos": "% duelos ganados",
+    "xG_diff": "Goles - xG", "xA_diff": "Asist. - xA",
+    "xG_diff_per90": "Goles-xG /90", "xA_diff_per90": "Asist-xA /90",
+    "min_por_partido": "Min / partido",
+    "defensiveActions_per90": "Acc. def. /90",
+    "pct_tiros_arco": "% gol",
+    "xG_per_shot": "xG / tiro",
 }
+
 PER90 = ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists",
          "totalShots", "shotsOnTarget", "keyPasses", "successfulDribbles",
          "tackles", "interceptions", "ballRecovery", "totalDuelsWon",
          "wasFouled", "fouls", "yellowCards", "redCards"]
 for c in PER90:
     RENOMBRES[f"{c}_per90"] = f"{RENOMBRES[c]} /90"
+
 COLUMNAS_GRUPOS = {
     "Básicas": ["player", "team", "posicion", "Edad", "rating", "minutesPlayed", "appearances"],
-    "Ataque": ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists", "penaltyGoals"],
+    "Ataque": ["goals", "assists", "goalsAssistsSum", "expectedGoals", "expectedAssists", "penaltyGoals", "xG_per_shot"],
     "Tiros": ["totalShots", "shotsOnTarget", "shotsOffTarget"],
     "Creación": ["bigChancesCreated", "keyPasses", "successfulDribbles"],
     "Pases": ["totalPasses", "accuratePassesPercentage"],
-    "Defensa": ["tackles", "interceptions", "ballRecovery", "clearances", "blockedShots", "totalDuelsWon", "duelLost"],
+    "Defensa": ["tackles", "interceptions", "ballRecovery", "clearances", "blockedShots",
+                "totalDuelsWon", "duelLost", "pct_duelos"],
     "Disciplina": ["yellowCards", "redCards", "fouls", "wasFouled", "ownGoals"],
+    "Derivadas": ["pct_conversion", "pct_duelos", "pct_tiros_arco", "xG_per_shot",
+                  "xG_diff", "xA_diff", "xG_diff_per90", "xA_diff_per90",
+                  "min_por_partido", "defensiveActions_per90"],
     "Por 90": [f"{c}_per90" for c in PER90],
 }
-ORDENES = ["rating", "goals", "goals_per90", "expectedGoals", "expectedGoals_per90",
-           "assists", "keyPasses", "minutesPlayed", "appearances", "totalShots",
-           "successfulDribbles", "tackles", "ballRecovery", "Edad"]
-# ======================
-# PARTIDO (mapeos nuevos)
-# ======================
-MATCH_RENOMBRES = {
-    "name": "Jugador", "position": "Pos", "shirtNumber": "Nº", "jerseyNumber": "Nº",
-    "substitute": "Sup", "minutesPlayed": "Min", "rating": "Rating",
-    "captain": "Cap", "teamName": "Equipo",
-    # ataque
-    "goals": "Goles", "goalAssist": "Asistencias",
-    "expectedGoals": "xG", "expectedAssists": "xA",
-    "totalShots": "Tiros", "onTargetScoringAttempt": "Tiros al arco",
-    "shotOffTarget": "Tiros fuera", "blockedScoringAttempt": "Tiros bloqueados",
-    "bigChanceCreated": "GC grandes", "bigChanceMissed": "GC falladas",
-    "penaltyWon": "Penalti ganado", "totalOffside": "Fuera de juego",
-    # pases
-    "totalPass": "Pases", "accuratePass": "Pases ok",
-    "totalLongBalls": "Balones largos", "accurateLongBalls": "Balones largos ok",
-    "keyPass": "Pases clave", "totalCross": "Centros", "accurateCross": "Centros ok",
-    "totalOwnHalfPasses": "Pases (propia mitad)", "accurateOwnHalfPasses": "Pases ok (propia mitad)",
-    # defensa / duelos
-    "wonTackle": "Entradas ganadas", "totalTackle": "Entradas",
-    "interceptionWon": "Intercepciones", "totalClearance": "Despejes",
-    "ballRecovery": "Balones rec.", "aerialWon": "Duelos aéreos g.",
-    "aerialLost": "Duelos aéreos p.", "duelWon": "Duelos ganados",
-    "duelLost": "Duelos perdidos", "wonContest": "Enfrentamientos g.",
-    "challengeLost": "Desafíos perd.", "outfielderBlock": "Bloqueos",
-    # posesión
-    "touches": "Toques", "possessionLostCtrl": "Pérdidas",
-    "dispossessed": "Desposesiones", "unsuccessfulTouch": "Malos controles",
-    # disciplina
-    "fouls": "Faltas", "wasFouled": "Faltas recibidas",
-    # portero
-    "saves": "Atajadas", "punches": "Puñetazos",
-    "goalsPrevented": "Goles evitados", "goodHighClaim": "Balones aéreos",
-    "savedShotsFromInsideTheBox": "Atajadas en el área", "penaltyFaced": "Penaltis afrontados",
-    "penaltyConceded": "Penalti concedido", "errorLeadToAGoal": "Error → gol",
-    # pases en campo rival
-    "accurateOppositionHalfPasses": "Pases ok (campo rival)",
-    "totalOppositionHalfPasses": "Pases (campo rival)",
-    # progresión / conducción
-    "totalBallCarriesDistance": "Dist. conducción", "ballCarriesCount": "Conducciones",
-    "totalProgression": "Progresión total", "progressiveBallCarriesCount": "Conducciones progresivas",
-    "bestBallCarryProgression": "Mejor progresión",
-    "totalProgressiveBallCarriesDistance": "Dist. conducción progresiva",
-    # xG
-    "expectedGoalsOnTarget": "xG al arco",
-    # duelos
-    "totalContest": "Duelos totales",
-}
-MATCH_ORDEN = [
-    "name", "position", "shirtNumber", "jerseyNumber", "substitute",
-    "minutesPlayed", "rating", "captain", "teamName",
-    "goals", "goalAssist", "expectedGoals", "expectedAssists",
-    "totalShots", "onTargetScoringAttempt", "shotOffTarget",
-    "blockedScoringAttempt", "expectedGoalsOnTarget",
-    "bigChanceCreated", "bigChanceMissed", "penaltyWon", "totalOffside",
-    "keyPass", "totalPass", "accuratePass", "totalCross", "accurateCross",
-    "totalLongBalls", "accurateLongBalls",
-    "totalOwnHalfPasses", "accurateOwnHalfPasses",
-    "totalOppositionHalfPasses", "accurateOppositionHalfPasses",
-    "touches", "ballCarriesCount", "totalBallCarriesDistance",
-    "totalProgression", "progressiveBallCarriesCount",
-    "totalProgressiveBallCarriesDistance", "bestBallCarryProgression",
-    "possessionLostCtrl", "dispossessed", "unsuccessfulTouch",
-    "wonTackle", "totalTackle", "interceptionWon", "totalClearance",
-    "ballRecovery", "aerialWon", "aerialLost", "duelWon", "duelLost",
-    "wonContest", "totalContest", "challengeLost", "outfielderBlock",
-    "fouls", "wasFouled",
-    "saves", "punches", "goalsPrevented", "goodHighClaim",
-    "savedShotsFromInsideTheBox", "penaltyFaced", "penaltyConceded",
-    "errorLeadToAGoal",
+
+ORDENES = [
+    "rating", "goals", "goals_per90", "pct_tiros_arco", "xG_per_shot",
+    "assists", "keyPasses", "successfulDribbles", "accuratePassesPercentage",
+    "pct_duelos", "xG_diff_per90", "minutesPlayed", "appearances",
+    "fouls", "wasFouled", "yellowCards",
+    "expectedGoals", "ballRecovery",
 ]
-COLUMNAS_JUNK = {
-    "firstName", "lastName", "slug", "shortName", "userCount", "gender",
-    "sofascoreId", "country", "id", "marketValueCurrency", "fieldTranslations",
-    "height", "dateOfBirthTimestamp", "proposedMarketValueRaw", "teamId",
-    "jerseyNumber.1", "position.1", "ratingVersions", "statisticsType",
-    "passValueNormalized", "defensiveValueNormalized", "dribbleValueNormalized",
-    "shotValueNormalized", "keeperSaveValue", "goalkeeperValueNormalized", "match_id",
+
+RADAR_STATS = {
+    "Creación": "keyPasses_per90",
+    "Regate": "successfulDribbles_per90",
+    "% duelos": "pct_duelos",
+    "Defensa": "tackles_per90",
+    "% pases": "accuratePassesPercentage",
+    "xG / tiro": "xG_per_shot",
 }
-# ======================
-# HELPERS
-# ======================
-def normalizar_partido(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-    for extra in ("position.1", "jerseyNumber.1"):
-        if extra in df.columns:
-            df = df.drop(columns=[extra])
-    if {"shirtNumber", "jerseyNumber"} <= set(df.columns):
-        df = df.drop(columns=["jerseyNumber"])
-    if "position" in df.columns:
-        df["position"] = df["position"].map(POS_CORTO).fillna(df["position"])
-    for col in ("substitute", "captain"):
-        if col in df.columns:
-            df[col] = df[col].astype(str).replace({"True": "Sí", "False": "No", "nan": ""})
-    return df
-def ruta_partido_csv(mid: int) -> str | None:
-    for p in (f"{DATA_DIR}/partidos/match_{mid}.csv", f"{DATA_DIR}/stats_{mid}.csv"):
-        if os.path.exists(p):
-            return p
-    return None
-def parsear_match_id(texto: str) -> int:
-    texto = texto.strip()
-    if texto.isdigit():
-        return int(texto)
-    m = re.search(r"#id:(\d+)", texto)
-    if m:
-        return int(m.group(1))
-    m = re.search(r"(\d{7,})", texto)
-    if m:
-        return int(m.group(1))
-    raise ValueError("No se pudo extraer el ID del partido del texto ingresado.")
-@st.cache_data(show_spinner=False)
-def cargar_partido_csv(mid: int):
-    p = ruta_partido_csv(mid)
-    if not p:
-        return None
-    return normalizar_partido(pd.read_csv(p))
-def cargar_meta() -> dict:
-    pm = f"{DATA_DIR}/.partidos_meta.json"
-    if os.path.exists(pm):
-        try:
-            with open(pm) as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {}
-def partidos_guardados() -> list[dict]:
-    meta = cargar_meta()
-    res: dict[int, str] = {}
-    archivos = sorted(glob.glob(f"{DATA_DIR}/stats_*.csv")) + sorted(glob.glob(f"{DATA_DIR}/partidos/match_*.csv"))
-    for p in archivos:
-        m = re.search(r"(\d+)", os.path.basename(p))
-        if not m:
-            continue
-        mid = int(m.group(1))
-        if mid in res:
-            continue
-        try:
-            df = pd.read_csv(p, nrows=200)
-        except Exception:
-            continue
-        dm = meta.get(str(mid), {})
-        if TEAM_DINGNAN in (dm.get("home"), dm.get("away")):
-            rival = dm.get("away") if dm.get("home") == TEAM_DINGNAN else dm.get("home")
-            texto = f"{TEAM_DINGNAN} vs {rival}" if rival else TEAM_DINGNAN
-        elif dm.get("home") and dm.get("away"):
-            texto = f"{dm['home']} vs {dm['away']}"
-        elif "teamName" in df.columns:
-            equipos = sorted(df["teamName"].dropna().unique())
-            if TEAM_DINGNAN in equipos:
-                texto = TEAM_DINGNAN
-            elif len(equipos) >= 2:
-                texto = f"{equipos[0]} vs {equipos[1]}"
-            elif len(equipos) == 1:
-                texto = equipos[0]
-            else:
-                texto = f"Partido {mid}"
-        else:
-            texto = f"Partido {mid}"
-        jornada = dm.get("round")
-        if jornada is None and "round" in df.columns and df["round"].notna().any():
-            jornada = df["round"].dropna().iloc[0]
-        if jornada is not None:
-            try:
-                texto += f" · Jornada {float(jornada):.0f}"
-            except (TypeError, ValueError):
-                texto += f" · Jornada {jornada}"
-        res[mid] = f"{texto} (id {mid})"
-    return [{"mid": mid, "label": label} for mid, label in sorted(res.items(), key=lambda x: -x[0])]
-def guardar_meta(mid: int, md: dict | None):
-    if not md:
-        return
-    pm = f"{DATA_DIR}/.partidos_meta.json"
-    try:
-        cache = json.load(open(pm)) if os.path.exists(pm) else {}
-    except Exception:
-        cache = {}
-    cache[str(mid)] = {
-        "home": md.get("homeTeam", {}).get("name"),
-        "away": md.get("awayTeam", {}).get("name"),
-        "round": (md.get("roundInfo") or {}).get("round"),
-        "homeScore": (md.get("homeScore") or {}).get("current"),
-        "awayScore": (md.get("awayScore") or {}).get("current"),
-    }
-    try:
-        with open(pm, "w") as f:
-            json.dump(cache, f, ensure_ascii=False)
-    except Exception:
-        pass
-@st.cache_data(show_spinner=False, ttl=3600)
-def info_partido_live(mid: int):
-    if Sofascore is None:
-        return None
-    try:
-        return Sofascore().get_match_dict(mid)
-    except Exception:
-        return None
-@st.cache_data(show_spinner=False, ttl=3600)
-def partido_live(mid: int) -> pd.DataFrame:
-    if Sofascore is None:
-        raise RuntimeError("El scraping en vivo requiere ScraperFC (solo disponible localmente)")
-    df = Sofascore().scrape_player_match_stats(mid)
-    return normalizar_partido(df)
-@st.cache_data(ttl=3600, show_spinner=False)
-def cargar_liga() -> pd.DataFrame:
-    df = pd.read_csv(LIGA_CSV)
+
+PERFIL_STATS = {
+    "Goles /90": "goals_per90",
+    "xG /90": "expectedGoals_per90",
+    "Goles - xG": "xG_diff",
+    "Goles-xG /90": "xG_diff_per90",
+    "Asistencias /90": "assists_per90",
+    "Asist. - xA": "xA_diff",
+    "Asist-xA /90": "xA_diff_per90",
+    "Pases clave /90": "keyPasses_per90",
+    "% pases": "accuratePassesPercentage",
+    "Regates ok /90": "successfulDribbles_per90",
+    "Acc. def. /90": "defensiveActions_per90",
+    "% duelos ganados": "pct_duelos",
+    "Faltas /90": "fouls_per90",
+    "Faltas recibidas /90": "wasFouled_per90",
+}
+
+# ============================================================
+# ESTILOS
+# ============================================================
+st.markdown("""
+<style>
+.block-container { padding-top: 1.5rem; }
+
+[data-testid="stMetricValue"] { font-weight: 700; }
+[data-testid="stMetricLabel"] { opacity: 0.75; }
+
+.player-header {
+    background: #171b23;
+    border-left: 6px solid var(--accent, #4fa8f0);
+    border-radius: 10px;
+    padding: 16px 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 4px;
+}
+.player-header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+.player-photo {
+    width: 100px; height: 100px; border-radius: 50%;
+    object-fit: cover; border: 3px solid var(--accent, #4fa8f0);
+    background: #11141a;
+    flex-shrink: 0;
+}
+.player-id .player-name-row {
+    display: flex; align-items: center; gap: 10px;
+}
+.player-id .player-name { font-size: 25px; font-weight: 800; letter-spacing: -0.3px; color: #f3f5f8; }
+.team-badge {
+    width: 28px; height: 28px; border-radius: 6px;
+    object-fit: contain;
+    background: #1e222d; padding: 3px;
+    border: 1px solid #2a2f3a;
+}
+.player-id .player-meta { font-size: 13.5px; color: #9aa4b5; margin-top: 3px; }
+.player-id .player-meta b { color: #d6dae2; }
+.rating-badge {
+    width: 58px; height: 58px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 800; color: #f3f5f8;
+    background: #11141a; border: 3px solid var(--accent, #4fa8f0);
+    flex-shrink: 0;
+}
+
+.stat-block { background: #14171e; border-radius: 10px; padding: 14px 16px 8px 16px; height: 100%; }
+.stat-block-title {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    color: #7c8698; font-weight: 700; margin-bottom: 8px;
+}
+.stat-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.stat-table td { padding: 6px 2px; border-bottom: 1px solid #22262f; color: #c9cfd8; }
+.stat-table td.val { text-align: right; font-weight: 700; color: #f0f2f5; white-space: nowrap; }
+.stat-table tr:last-child td { border-bottom: none; }
+
+.pct-bar-row {
+    display: flex; align-items: center; gap: 8px; margin: 4px 0;
+}
+.pct-bar-label {
+    width: 150px; font-size: 13px; color: #c9cfd8; flex-shrink: 0;
+}
+.pct-bar-track {
+    flex: 1; background: #1a1e27; border-radius: 4px; height: 10px; overflow: hidden;
+}
+.pct-bar-fill-green { height: 100%; background: #4fdc84; border-radius: 4px; }
+.pct-bar-fill-red   { height: 100%; background: #f0776f; border-radius: 4px; }
+.pct-bar-value {
+    width: 38px; font-size: 12px; font-weight: 700; text-align: right; color: #f0f2f5;
+}
+
+.section-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1.2px;
+    color: #7c8698; margin: 14px 0 4px 2px; font-weight: 700;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ============================================================
+# DATOS
+# ============================================================
+@st.cache_data
+def cargar():
+    df = pd.read_csv("data/top_jugadores_liga.csv")
     df["player id"] = df["player id"].astype(str)
     df["team id"] = df["team id"].astype(str)
+    df["Edad"] = pd.to_numeric(df["Edad"], errors="coerce").astype("Int64")
+
+    per90_cols = [f"{c}_per90" for c in PER90]
+    for c in per90_cols:
+        if c in df.columns:
+            df.loc[df["minutesPlayed"] < 90, c] = pd.NA
+
+    df["pct_conversion"] = (df["goals"] / df["totalShots"] * 100).where(df["totalShots"] > 0)
+    df["xG_diff"] = df["goals"] - df["expectedGoals"]
+    df["xA_diff"] = df["assists"] - df["expectedAssists"]
+    df["xG_diff_per90"] = df["goals_per90"] - df["expectedGoals_per90"]
+    df["xA_diff_per90"] = df["assists_per90"] - df["expectedAssists_per90"]
+    duelos_tot = df["totalDuelsWon"] + df["duelLost"]
+    df["pct_duelos"] = (df["totalDuelsWon"] / duelos_tot * 100).where(duelos_tot > 0)
+    df["min_por_partido"] = (df["minutesPlayed"] / df["appearances"]).where(df["appearances"] > 0)
+    df["defensiveActions_per90"] = df["tackles_per90"].fillna(0) + df["interceptions_per90"].fillna(0)
+    df["pct_tiros_arco"] = (df["goals"] / df["shotsOnTarget"] * 100).where(df["shotsOnTarget"] >= 5)
+    df["xG_per_shot"] = (df["expectedGoals"] / df["totalShots"]).where(df["totalShots"] >= 5)
+    df["accuratePassesPercentage"] = df["accuratePassesPercentage"].where(df["totalPasses"] >= 20)
+
     return df
-@st.cache_data(ttl=86400, show_spinner=False)
-def foto_jugador(player_id: int) -> bytes | None:
-    """Foto del jugador desde la API pública de Sofascore. Cacheada 24hs para
-    no golpear la API en cada rerender de Streamlit. Devuelve None si falla
-    o si el jugador no tiene foto cargada."""
+
+
+@st.cache_data
+def ultima_actualizacion() -> str:
     try:
-        r = requests.get(f"https://api.sofascore.com/api/v1/player/{player_id}/image", timeout=5)
-        return r.content if r.status_code == 200 else None
+        with open("data/ultima_actualizacion.txt") as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "desconocida"
+
+
+@st.cache_data
+def calcular_percentiles(df: pd.DataFrame, stats: dict) -> pd.DataFrame:
+    pct = pd.DataFrame(index=df.index)
+    for label, col in stats.items():
+        pct[label] = (df[col].rank(pct=True) * 100).round(0)
+    return pct
+
+
+def tier_color(rating: float) -> str:
+    if pd.isna(rating):
+        return "#8b929c"
+    if rating >= 7.3:
+        return "#d4af37"
+    if rating >= 6.9:
+        return "#4fa8f0"
+    if rating >= 6.5:
+        return "#8b929c"
+    return "#b06a3d"
+
+
+def fmt(v, dec=1):
+    return "—" if pd.isna(v) else f"{v:.{dec}f}"
+
+
+def hex_to_rgba(hex_color: str, alpha: float) -> str:
+    hex_color = hex_color.lstrip("#")
+    r, g, b = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def img_to_base64(url: str) -> str:
+    try:
+        resp = requests.get(url, timeout=8)
+        if resp.status_code == 200 and resp.content:
+            b64 = base64.b64encode(resp.content).decode()
+            return f"data:image/png;base64,{b64}"
     except Exception:
-        return None
-def config_columnas(vista: pd.DataFrame) -> dict:
-    config = {}
-    for c in vista.columns:
-        if pd.api.types.is_numeric_dtype(vista[c]):
-            v = vista[c].dropna()
-            if v.empty:
-                continue
-            enteros = (v % 1 == 0).all()
-            config[c] = st.column_config.NumberColumn(format="%d" if enteros else "%.2f")
-    return config
-# ======================
-# RENDER PARTIDO
-# ======================
-def render_header(mid: int, md: dict | None, df: pd.DataFrame):
-    home = away = hs = as_ = None
-    if md:
-        home = md.get("homeTeam", {}).get("name")
-        away = md.get("awayTeam", {}).get("name")
-        hs = (md.get("homeScore") or {}).get("current")
-        as_ = (md.get("awayScore") or {}).get("current")
-        jornada = md.get("roundInfo", {}).get("round")
-        torneo = md.get("tournament", {}).get("name")
-        try:
-            fecha = dt.datetime.fromtimestamp(md.get("startTimestamp", 0)).strftime("%d/%m/%Y %H:%M")
-        except Exception:
-            fecha = None
-        estado = md.get("status", {}).get("description")
-    else:
-        dm = cargar_meta().get(str(mid), {})
-        home, away = dm.get("home"), dm.get("away")
-        hs, as_ = dm.get("homeScore"), dm.get("awayScore")
-        jornada = dm.get("round")
-        if not (home and away):
-            equipos = sorted(df["teamName"].dropna().unique()) if "teamName" in df.columns else []
-            if equipos:
-                home, away = equipos[0], equipos[-1] if len(equipos) > 1 else equipos[0]
-        if jornada is None and "round" in df.columns:
-            jornada = df["round"].iloc[0]
-        torneo = fecha = estado = None
-    c1, cs, c2 = st.columns([1, 0.4, 1], vertical_alignment="center")
-    c1.markdown(f"### {home or '—'}")
-    marcador = f"{hs} - {as_}" if hs is not None else "vs"
-    cs.markdown(
-        f"<div style='text-align:center;font-size:42px;font-weight:800'>{marcador}</div>",
-        unsafe_allow_html=True,
+        pass
+    return ""
+
+
+def stat_row(label, value):
+    return f"<tr><td>{label}</td><td class='val'>{value}</td></tr>"
+
+
+def stat_cnt(row, col, dec=0):
+    if col not in row or pd.isna(row[col]):
+        return "N/D" if columnas_sin_datos.get(col) else "—"
+    return f"{row[col]:.{dec}f}"
+
+
+def pct_bar_html(label, value, is_positive=True):
+    color_class = "pct-bar-fill-green" if is_positive else "pct-bar-fill-red"
+    return (
+        f'<div class="pct-bar-row">'
+        f'<span class="pct-bar-label">{label}</span>'
+        f'<div class="pct-bar-track"><div class="{color_class}" style="width:{value:.0f}%;"></div></div>'
+        f'<span class="pct-bar-value">P{int(value)}</span>'
+        f'</div>'
     )
-    c2.markdown(f"### {away or '—'}")
-    partes = []
-    if jornada:
-        partes.append(f"Jornada {jornada}")
-    if torneo:
-        partes.append(torneo)
-    if fecha:
-        partes.append(fecha)
-    if estado:
-        partes.append(estado)
-    if partes:
-        st.caption("  ·  ".join(partes))
-def render_partido():
-    st.markdown("## ⚽ Análisis por partido")
-    st.caption(
-        "Elegí un partido guardado en `data/` o cargá otro por **ID** / **URL de Sofascore**. "
-        "Se muestra la información general y el reporte individual por equipo."
-    )
-    guardados = partidos_guardados()
-    OTRO = "✍️ Otro partido (por ID/URL)"
-    if guardados:
-        labels = [p["label"] for p in guardados]
-        mids = [p["mid"] for p in guardados]
-        sel = st.selectbox("📂 Partidos guardados en data/", ["— Elegí un partido —"] + labels + [OTRO])
-        if sel not in ("— Elegí un partido —", OTRO):
-            st.session_state["mid"] = mids[labels.index(sel)]
-        elif sel == OTRO:
-            with st.form("form_partido"):
-                raw = st.text_input(
-                    "ID o URL del partido",
-                    placeholder="15657854  |  https://www.sofascore.com/.../match#id:15657854",
-                )
-                enviado = st.form_submit_button("Cargar partido", type="primary")
-            if enviado and raw.strip():
-                try:
-                    st.session_state["mid"] = parsear_match_id(raw)
-                except ValueError as e:
-                    st.error(str(e))
-    else:
-        with st.form("form_partido"):
-            raw = st.text_input(
-                "ID o URL del partido",
-                placeholder="15657854  |  https://www.sofascore.com/.../match#id:15657854",
-            )
-            enviado = st.form_submit_button("Cargar partido", type="primary")
-        if enviado and raw.strip():
-            try:
-                st.session_state["mid"] = parsear_match_id(raw)
-            except ValueError as e:
-                st.error(str(e))
-    mid = st.session_state.get("mid")
-    if not mid:
-        st.info("Elegí un partido guardado arriba o escribí un ID de partido.")
-        return
-    df = cargar_partido_csv(mid)
-    md = None
-    if df is None:
-        col1, col2 = st.columns([3, 1])
-        col1.warning(
-            "No hay datos guardados para este partido en `data/`. "
-            "Podés correr `python analisis.py` o `scrape_liga.py` con este ID para guardarlos, "
-            "o scrapearlos ahora desde acá."
-        )
-        if col2.button("Scrapear ahora", type="primary"):
-            with st.spinner("Scrapeando el partido desde Sofascore..."):
-                try:
-                    md = info_partido_live(mid)
-                    df = partido_live(mid)
-                except Exception as e:
-                    st.error(f"No se pudo scrapear el partido: {e}")
-            if df is not None and not df.empty:
-                if st.button("💾 Guardar en data/"):
-                    df.to_csv(f"{DATA_DIR}/stats_{mid}.csv", index=False)
-                    st.success(f"Guardado en `data/stats_{mid}.csv`")
-    else:
-        with st.spinner("Buscando información general del partido..."):
-            md = info_partido_live(mid)
-    if df is None or df.empty:
-        st.stop()
-    guardar_meta(mid, md)
-    render_header(mid, md, df)
+
+
+df = cargar()
+
+columnas_sin_datos = {c: df[c].isna().all() for c in df.columns if df[c].dtype != "object"}
+
+RADAR_STATS = {k: v for k, v in RADAR_STATS.items() if not columnas_sin_datos.get(v)}
+PERFIL_STATS = {k: v for k, v in PERFIL_STATS.items() if not columnas_sin_datos.get(v)}
+
+percentiles_radar = calcular_percentiles(df, RADAR_STATS)
+percentiles_perfil = calcular_percentiles(df, PERFIL_STATS)
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+with st.sidebar:
+    st.markdown("## ⚽ Dingnan United")
+    st.caption(f"China League 1 · Temporada 2026 · Sofascore · Datos: {ultima_actualizacion()}")
     st.divider()
-    # ---- reporte individual por equipo ----
-    if "teamName" in df.columns:
-        equipos = sorted(df["teamName"].dropna().unique())
-    else:
-        equipos = []
-    default = TEAM_DINGNAN if TEAM_DINGNAN in equipos else (equipos[0] if equipos else None)
-    opciones = ["Todos"] + equipos
-    seleccion = st.radio("Equipo", opciones, index=opciones.index(default) if default in opciones else 0,
-                         horizontal=True)
-    sub = df if seleccion == "Todos" else df[df["teamName"] == seleccion]
-    orden_col = "minutesPlayed" if "minutesPlayed" in sub.columns else "rating"
-    sub = sub.sort_values([orden_col, "rating"], ascending=[False, False], na_position="last")
-    cols = [c for c in MATCH_ORDEN if c in sub.columns]
-    cols += [c for c in sub.columns if c not in MATCH_ORDEN and c not in COLUMNAS_JUNK]
-    vista = sub[cols].rename(columns=MATCH_RENOMBRES)
-    st.markdown(f"**{len(sub)}** jugadores" + (f" · {seleccion}" if seleccion != "Todos" else ""))
-    config = config_columnas(vista)
-    st.dataframe(vista, width="stretch", height=460, column_config=config)
-    st.download_button(
-        "⬇️ Descargar CSV del partido",
-        data=vista.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"partido_{mid}.csv",
-        mime="text/csv",
-    )
-# ======================
-# RENDER LIGA UNO
-# ======================
-def render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
-                rating_min, orden_col, ascendente, grupos_sel):
-    df = cargar_liga()
+
+    with st.expander("🔎 Filtros", expanded=True):
+        posiciones = st.multiselect("Posición", sorted(df["posicion"].dropna().unique()),
+                                    default=sorted(df["posicion"].dropna().unique()))
+        equipos = st.multiselect("Equipo", sorted(df["team"].unique()), default=sorted(df["team"].unique()))
+        rango_edad = st.slider("Edad", 15, 45, (15, 45))
+        rango_min = st.slider("Minutos mínimos", 0, int(df["minutesPlayed"].max()), 300)
+        rating_min = st.slider("Rating mínimo", 0.0, 10.0, 0.0, 0.1)
+
     filtro = (
         df["posicion"].isin(posiciones)
         & df["team"].isin(equipos)
-        & (df["Edad"] >= rango_edad[0]) & (df["Edad"] <= rango_edad[1])
+        & ((df["Edad"].isna()) | (df["Edad"] >= rango_edad[0]) & (df["Edad"] <= rango_edad[1]))
         & (df["minutesPlayed"] >= rango_min)
         & (df["rating"] >= rating_min)
     )
-    if paises:
-        filtro &= df["País"].isin(paises)
-    if pie:
-        filtro &= df["Pie"].isin(pie)
     filtrado = df[filtro].copy()
-    if filtrado.empty:
-        st.warning("No hay jugadores que cumplan los filtros.")
-        st.stop()
-    filtrado = filtrado.sort_values(orden_col, ascending=ascendente, na_position="last")
-    st.markdown("## 🏆 Liga Uno · Top jugadores")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Jugadores", f"{len(filtrado):,}")
-    c2.metric("Rating promedio", f"{filtrado['rating'].mean():.2f}")
-    c3.metric("Goles totales", f"{filtrado['goals'].sum():,.0f}")
-    mejor = filtrado.loc[filtrado["rating"].idxmax()]
-    c4.metric("Mejor rating", f"{mejor['rating']:.2f}", f"{mejor['player']}")
-    tab_tabla, tab_graficos, tab_ficha = st.tabs(["📋 Tabla", "📊 Gráficos", "👤 Ficha de jugador"])
-    with tab_tabla:
-        cols = []
-        for g in grupos_sel:
-            cols += [c for c in COLUMNAS_GRUPOS[g] if c in filtrado.columns]
-        cols = list(dict.fromkeys(cols))
-        vista = filtrado[cols].rename(columns=RENOMBRES)
-        config = config_columnas(vista)
-        st.dataframe(vista, width="stretch", height=520, column_config=config)
-        csv = vista.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ Descargar CSV", data=csv, file_name="top_jugadores_filtrado.csv",
-                           mime="text/csv")
-    with tab_graficos:
-        g1, g2 = st.columns(2)
-        with g1:
-            fig = px.scatter(filtrado, x="goals_per90", y="expectedGoals_per90",
-                             color="posicion", size="minutesPlayed",
-                             hover_name="player", hover_data=["team", "rating"],
-                             labels={"goals_per90": "Goles /90", "expectedGoals_per90": "xG /90"},
-                             title="Goles vs xG por 90")
-            st.plotly_chart(fig, width="stretch")
-        with g2:
-            top = filtrado.nlargest(10, "rating")
-            fig = px.bar(top.sort_values("rating"), x="rating", y="player", orientation="h",
-                         color="posicion", hover_data=["team", "minutesPlayed"],
-                         labels={"rating": "Rating", "player": ""}, title="Top 10 rating")
-            fig.update_layout(yaxis=dict(autorange="reversed"))
-            st.plotly_chart(fig, width="stretch")
-        g3, g4 = st.columns(2)
-        with g3:
-            fig = px.scatter(filtrado, x="goals", y="assists", color="posicion",
-                             size="minutesPlayed", hover_name="player", hover_data=["team", "rating"],
-                             labels={"goals": "Goles", "assists": "Asistencias"},
-                             title="Goles vs Asistencias")
-            st.plotly_chart(fig, width="stretch")
-        with g4:
-            fig = px.histogram(filtrado, x="Edad", nbins=20, color_discrete_sequence=["#0ea5e9"],
-                               labels={"Edad": "Edad"}, title="Distribución de edad")
-            st.plotly_chart(fig, width="stretch")
-    with tab_ficha:
-        jugador = st.selectbox("Seleccionar jugador", filtrado["player"].unique())
-        p = filtrado[filtrado["player"] == jugador].iloc[0]
 
-        # ---- header: foto + datos básicos ----
-        col_foto, col_info = st.columns([1, 3])
-        with col_foto:
-            img = foto_jugador(int(p["player id"]))
-            if img:
-                st.image(img, width=110)
-            else:
-                st.markdown(
-                    f"<div style='width:96px;height:96px;border-radius:50%;background:#e6f1fb;"
-                    f"display:flex;align-items:center;justify-content:center;font-size:28px;"
-                    f"font-weight:500;color:#0c447c'>{jugador[0]}</div>",
-                    unsafe_allow_html=True,
-                )
-        with col_info:
-            st.markdown(f"### {p['player']}")
-            detalle = f"{p['team']} · {p['posicion']} · {p['Edad']:.0f} años"
-            if "Altura" in p.index:
-                detalle += f" · {p['Altura']:.0f} cm"
-            if "Pie" in p.index and pd.notna(p["Pie"]):
-                detalle += f" · {p['Pie']}"
-            st.caption(detalle)
+    METRICAS_SIN_PORTEROS = {"pct_duelos", "ballRecovery", "defensiveActions_per90"}
 
-        metricas_ficha = [
-            ("Rating", f"{p['rating']:.2f}"),
-            ("Goles", f"{p['goals']:.0f}"),
-            ("Goles /90", f"{p['goals_per90']:.2f}"),
-            ("Asistencias", f"{p['assists']:.0f}"),
-            ("Minutos", f"{p['minutesPlayed']:.0f}"),
-        ]
-        if "Valor" in p.index and pd.notna(p["Valor"]):
-            metricas_ficha.append(("Valor", p["Valor"]))
-        cols_ficha = st.columns(len(metricas_ficha))
-        for col, (lbl, val) in zip(cols_ficha, metricas_ficha):
-            col.metric(lbl, val)
-
-        st.divider()
-
-        # ---- radar: jugador vs promedio de liga ----
-        ficha_metricas = ["expectedGoals_per90", "expectedAssists_per90", "keyPasses_per90",
-                          "successfulDribbles_per90", "tackles_per90", "interceptions_per90",
-                          "ballRecovery_per90"]
-        valores_jugador = [p[c] for c in ficha_metricas]
-        valores_liga = [df[c].mean() for c in ficha_metricas]
-        etiquetas = [RENOMBRES[c] for c in ficha_metricas]
-
-        fig = go.Figure()
-        fig.add_trace(go.Scatterpolar(
-            r=valores_jugador, theta=etiquetas, fill="toself",
-            name=p["player"], line_color="#2a78d6",
-        ))
-        fig.add_trace(go.Scatterpolar(
-            r=valores_liga, theta=etiquetas, fill="toself",
-            name="Promedio liga", line_color="#898781", line_dash="dot",
-            opacity=0.6,
-        ))
-        fig.update_layout(
-            polar=dict(radialaxis=dict(visible=True, showticklabels=False)),
-            showlegend=True,
-            title="Jugador vs promedio de la liga (por 90)",
-            height=420,
-        )
-        st.plotly_chart(fig, width="stretch")
-# ======================
-# APP
-# ======================
-with st.sidebar:
-    st.markdown("## Dingnan United")
-    st.caption(f"China League 1 · Temporada {YEAR} · Sofascore")
-    seccion = st.radio("Sección", ["⚽ Análisis por partido", "🏆 Liga Uno"])
-    st.divider()
-    if seccion == "🏆 Liga Uno":
-        df_liga = cargar_liga()
-        posiciones = st.multiselect("Posición", sorted(df_liga["posicion"].dropna().unique()),
-                                    default=sorted(df_liga["posicion"].dropna().unique()))
-        equipos = st.multiselect("Equipo", sorted(df_liga["team"].unique()),
-                                 default=sorted(df_liga["team"].unique()))
-        paises = st.multiselect("País", sorted(df_liga["País"].dropna().unique()), default=[]) if "País" in df_liga.columns else []
-        pie = st.multiselect("Pie", sorted(df_liga["Pie"].dropna().unique()), default=[]) if "Pie" in df_liga.columns else []
-        edad_min, edad_max = int(df_liga["Edad"].min()), int(df_liga["Edad"].max())
-        rango_edad = st.slider("Edad", edad_min, edad_max, (edad_min, edad_max))
-        rango_min = st.slider("Minutos mínimos", 0, int(df_liga["minutesPlayed"].max()), 300)
-        rating_min = st.slider("Rating mínimo", 0.0, 10.0, 0.0, 0.1)
-        st.divider()
-        orden_col = st.selectbox("Ordenar por", ORDENES, format_func=lambda c: RENOMBRES[c])
+    with st.expander("⚙️ Tabla y orden", expanded=False):
+        orden_col = st.selectbox("Ordenar por", ORDENES, format_func=lambda c: RENOMBRES.get(c, c))
         ascendente = st.checkbox("Ascendente", value=False)
         grupos_sel = st.multiselect("Columnas a mostrar", list(COLUMNAS_GRUPOS),
-                                    default=["Básicas", "Ataque", "Tiros", "Creación", "Por 90"])
+                                    default=["Básicas", "Ataque", "Tiros", "Creación", "Derivadas"])
+
+    orden_para_sort = orden_col
+    if orden_col in METRICAS_SIN_PORTEROS:
+        orden_para_sort = f"_orden_{orden_col}"
+        filtrado[orden_para_sort] = filtrado[orden_col].where(filtrado["posicion"] != "Portero")
+
+    filtrado = filtrado.sort_values(orden_para_sort, ascending=ascendente, na_position="last")
+
+    st.divider()
+    st.markdown("### 🃏 Ficha de jugador")
+    if filtrado.empty:
+        st.info("Ningún jugador cumple los filtros.")
+        jugador = None
     else:
-        st.caption("Pegá el ID del partido en el área principal.")
-if seccion == "⚽ Análisis por partido":
-    render_partido()
+        ficha_key = f"ficha_{orden_col}_{ascendente}"
+        jugador = st.selectbox(
+            "Elegir jugador (según filtros y orden de la tabla)",
+            pd.unique(filtrado["player"]),
+            key=ficha_key,
+        )
+        st.caption(f"{len(filtrado)} jugadores disponibles con los filtros actuales.")
+
+if filtrado.empty:
+    st.warning("No hay jugadores que cumplan los filtros.")
+    st.stop()
+
+# ============================================================
+# BARRA DE RESUMEN
+# ============================================================
+st.caption(
+    f"📋 **{len(filtrado):,}** jugadores filtrados · "
+    f"Rating promedio **{filtrado['rating'].mean():.2f}** · "
+    f"Mejor rating: **{filtrado.loc[filtrado['rating'].idxmax(), 'player']}** "
+    f"({filtrado['rating'].max():.2f})"
+)
+
+# ============================================================
+# FICHA DE JUGADOR
+# ============================================================
+p = df[df["player"] == jugador].iloc[0]
+accent = tier_color(p["rating"])
+edad_txt = f"{p['Edad']:.0f} años" if pd.notna(p["Edad"]) else "Edad ND"
+es_portero = p["posicion"] == "Portero"
+
+tiros_tot, tiros_arco = p["totalShots"], p["shotsOnTarget"]
+pct_tiros_arco = (tiros_arco / tiros_tot * 100) if tiros_tot else 0
+duelos_tot = p["totalDuelsWon"] + p["duelLost"]
+pct_duelos_val = (p["totalDuelsWon"] / duelos_tot * 100) if duelos_tot else 0
+sobr_xg = p["xG_diff"]
+xg_shot = p["xG_per_shot"]
+
+photo_b64 = img_to_base64(f"https://img.sofascore.com/api/v1/player/{p['player id']}/image")
+badge_b64 = img_to_base64(f"https://img.sofascore.com/api/v1/team/{p['team id']}/image")
+
+st.markdown(f"""
+<div class="player-header" style="--accent:{accent};">
+    <div class="player-header-left">
+        <img class="player-photo" src="{photo_b64}" alt="{p['player']}"
+             onerror="this.style.display='none'">
+        <div class="player-id">
+            <div class="player-name-row">
+                <span class="player-name">{p['player']}</span>
+                <img class="team-badge" src="{badge_b64}" alt="{p['team']}"
+                     onerror="this.style.display='none'">
+            </div>
+            <div class="player-meta">
+                {p['team']} · <b>{p['posicion']}</b> · {edad_txt} ·
+                {p['appearances']:.0f} partidos · {p['minutesPlayed']:.0f}' jugados
+                · {p['min_por_partido']:.0f}'/partido
+            </div>
+        </div>
+    </div>
+    <div class="rating-badge" style="--accent:{accent};">{p['rating']:.2f}</div>
+</div>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# FICHA — 4 BLOQUES DE STATS
+# ============================================================
+col1, col2, col3, col4 = st.columns([1.1, 1.1, 0.95, 0.95])
+
+if not es_portero:
+    with col1:
+        sobr_txt = f"+{sobr_xg:.1f}" if pd.notna(sobr_xg) and sobr_xg >= 0 else (f"{sobr_xg:.1f}" if pd.notna(sobr_xg) else "—")
+        xg_shot_txt = f"{xg_shot:.2f}" if pd.notna(xg_shot) else "—"
+        def_txt = f"{p['goals']:.0f}/{tiros_arco:.0f} ({p['pct_tiros_arco']:.0f}%)" if pd.notna(p["pct_tiros_arco"]) else "—"
+        st.markdown(f"""
+        <div class="stat-block">
+          <div class="stat-block-title">Ofensiva</div>
+          <table class="stat-table">
+            {stat_row("Goles", f"{p['goals']:.0f}")}
+            {stat_row("Asistencias", f"{p['assists']:.0f}")}
+            {stat_row("G+A", f"{p['goalsAssistsSum']:.0f}")}
+            {stat_row("Goles - xG", sobr_txt)}
+            {stat_row("% gol", def_txt)}
+            {stat_row("Tiros", f"{tiros_tot:.0f}")}
+            {stat_row("Tiros al arco", f"{tiros_arco:.0f} ({pct_tiros_arco:.0f}%)")}
+            {stat_row("Tiros fuera", f"{p['shotsOffTarget']:.0f}")}
+            {stat_row("De penal", f"{p['penaltyGoals']:.0f}")}
+            {stat_row("xG / tiro", xg_shot_txt)}
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        kp90 = stat_cnt(p, "keyPasses_per90", 2)
+        dr90 = stat_cnt(p, "successfulDribbles_per90", 2)
+        st.markdown(f"""
+        <div class="stat-block">
+          <div class="stat-block-title">Creación</div>
+          <table class="stat-table">
+            {stat_row("Pases clave", f"{p['keyPasses']:.0f} · {kp90} /90")}
+            {stat_row("Ocasiones creadas", stat_cnt(p, "bigChancesCreated"))}
+            {stat_row("Regates ok", f"{p['successfulDribbles']:.0f} · {dr90} /90")}
+            {stat_row("Pases (precisión)", f"{p['totalPasses']:.0f} ({p['accuratePassesPercentage']:.0f}%)")}
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
 else:
-    render_liga(posiciones, equipos, paises, pie, rango_edad, rango_min,
-                rating_min, orden_col, ascendente, grupos_sel)
+    with col1:
+        st.markdown(f"""
+        <div class="stat-block">
+          <div class="stat-block-title">Portería</div>
+          <table class="stat-table">
+            {stat_row("Partidos", f"{p['appearances']:.0f}")}
+            {stat_row("Minutos", f"{p['minutesPlayed']:.0f}")}
+            {stat_row("Balones recuperados", f"{p['ballRecovery']:.0f}")}
+            {stat_row("Despejes", f"{p['clearances']:.0f}")}
+            {stat_row("Tiros bloqueados", f"{p['blockedShots']:.0f}")}
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
+    with col2:
+        st.markdown(f"""
+        <div class="stat-block">
+          <div class="stat-block-title">Distribución</div>
+          <table class="stat-table">
+            {stat_row("Pases (precisión)", f"{p['totalPasses']:.0f} ({p['accuratePassesPercentage']:.0f}%)")}
+            {stat_row("Pases clave", f"{p['keyPasses']:.0f}")}
+            {stat_row("Balones rec. /90", stat_cnt(p, "ballRecovery_per90", 1))}
+          </table>
+        </div>
+        """, unsafe_allow_html=True)
+
+with col3:
+    tk90 = stat_cnt(p, "tackles_per90", 2)
+    ic90 = stat_cnt(p, "interceptions_per90", 2)
+    br90 = stat_cnt(p, "ballRecovery_per90", 1)
+    st.markdown(f"""
+    <div class="stat-block">
+      <div class="stat-block-title">{'Defensa' if not es_portero else 'Disciplina'}</div>
+      <table class="stat-table">
+        {"" if es_portero else stat_row("Entradas", f"{p['tackles']:.0f} · {tk90} /90")}
+        {"" if es_portero else stat_row("Intercepciones", f"{p['interceptions']:.0f} · {ic90} /90")}
+        {"" if es_portero else stat_row("Recuperaciones", f"{p['ballRecovery']:.0f} · {br90} /90")}
+        {"" if es_portero else stat_row("Despejes", f"{p['clearances']:.0f}")}
+        {stat_row("Duelos ganados", f"{p['totalDuelsWon']:.0f}/{duelos_tot:.0f} ({pct_duelos_val:.0f}%)")}
+      </table>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col4:
+    st.markdown(f"""
+    <div class="stat-block">
+      <div class="stat-block-title">{'Disciplina' if not es_portero else 'Faltas'}</div>
+      <table class="stat-table">
+        {stat_row("Faltas cometidas", f"{p['fouls']:.0f}")}
+        {stat_row("Faltas recibidas", f"{p['wasFouled']:.0f}")}
+        {stat_row("Tiros bloqueados", f"{p['blockedShots']:.0f}")}
+        {stat_row("Autogoles", f"{p['ownGoals']:.0f}")}
+        {stat_row("Amarillas / Rojas", f"{p['yellowCards']:.0f} / {p['redCards']:.0f}")}
+      </table>
+    </div>
+    """, unsafe_allow_html=True)
+
+_campos = ["expectedGoals", "expectedAssists", "tackles", "interceptions", "bigChancesCreated"]
+_faltantes = [RENOMBRES.get(c, c) for c in _campos if columnas_sin_datos.get(c)]
+if _faltantes:
+    st.caption(
+        f"⚠️ Sin datos en la fuente para esta liga: {', '.join(_faltantes)} "
+        "(Sofascore no publica estas métricas para China League 1; no depende de la app)."
+    )
+
+st.write("")
+col_radar, col_perfil = st.columns([1, 1.6])
+
+# ============================================================
+# RADAR
+# ============================================================
+with col_radar:
+    st.markdown('<div class="section-label">Perfil de juego (percentil vs. liga)</div>', unsafe_allow_html=True)
+    pj = percentiles_radar.loc[p.name].dropna()
+
+    if pj.empty:
+        st.caption("No hay datos suficientes para graficar el radar.")
+    else:
+        radar_vals = list(pj.values) + [list(pj.values)[0]]
+        radar_labels = list(pj.index) + [list(pj.index)[0]]
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=radar_vals, theta=radar_labels, fill="toself",
+            fillcolor=hex_to_rgba(accent, 0.35), line=dict(color=accent, width=2),
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                bgcolor="rgba(0,0,0,0)",
+                radialaxis=dict(visible=True, range=[0, 100], showticklabels=False, gridcolor="#2a2f3a"),
+                angularaxis=dict(gridcolor="#2a2f3a"),
+            ),
+            showlegend=False, height=280,
+            margin=dict(l=30, r=30, t=20, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+        )
+        st.plotly_chart(fig_radar, width="stretch", config={"displayModeBar": False})
+
+# ============================================================
+# FORTALEZAS / A MEJORAR — barras de percentil
+# ============================================================
+with col_perfil:
+    st.markdown('<div class="section-label">Fortalezas y aspectos a mejorar</div>', unsafe_allow_html=True)
+    pj_perfil = percentiles_perfil.loc[p.name].dropna().sort_values(ascending=False)
+
+    if pj_perfil.empty:
+        st.caption("No hay minutos suficientes para calcular percentiles de este jugador.")
+    else:
+        fuertes = pj_perfil.head(3)
+        debiles = pj_perfil.tail(3).iloc[::-1]
+
+        html_barras = ""
+        for label, val in fuertes.items():
+            html_barras += pct_bar_html(f"▲ {label}", val, is_positive=True)
+        html_barras += '<div style="height:8px;"></div>'
+        for label, val in debiles.items():
+            html_barras += pct_bar_html(f"▼ {label}", val, is_positive=False)
+
+        st.markdown(html_barras, unsafe_allow_html=True)
+        st.caption(
+            "Percentil (P) = posición del jugador dentro de toda la liga (300+ min), "
+            "100 = el mejor, 0 = el último."
+        )
+
+st.divider()
+
+# ============================================================
+# TABLA
+# ============================================================
+st.markdown('<div class="section-label">📋 Jugadores filtrados</div>', unsafe_allow_html=True)
+
+cols = []
+for g in grupos_sel:
+    cols += [c for c in COLUMNAS_GRUPOS.get(g, []) if c in filtrado.columns]
+cols = list(dict.fromkeys(cols))
+
+vista = filtrado[cols].copy()
+vista = vista.rename(columns={c: RENOMBRES.get(c, c) for c in vista.columns})
+
+config = {}
+for c in vista.columns:
+    if pd.api.types.is_numeric_dtype(vista[c]):
+        if pd.api.types.is_integer_dtype(vista[c]):
+            config[c] = st.column_config.NumberColumn(format="%d")
+        else:
+            config[c] = st.column_config.NumberColumn(format="%.2f")
+
+st.dataframe(vista, width="stretch", height=520, column_config=config)
+
+csv = vista.to_csv(index=False).encode("utf-8-sig")
+st.download_button("⬇️ Descargar CSV", data=csv, file_name="top_jugadores_filtrado.csv",
+                   mime="text/csv")
+
+# ============================================================
+# GRÁFICOS
+# ============================================================
+with st.expander("📊 Ver gráficos", expanded=False):
+    g1, g2 = st.columns(2)
+    with g1:
+        fig = px.scatter(filtrado, x="goals_per90", y="expectedGoals_per90",
+                         color="posicion", size="minutesPlayed",
+                         hover_name="player", hover_data=["team", "rating"],
+                         labels={"goals_per90": "Goles /90", "expectedGoals_per90": "xG /90"},
+                         title="Goles vs xG por 90")
+        st.plotly_chart(fig, width="stretch")
+    with g2:
+        top = filtrado.nlargest(10, "rating")
+        fig = px.bar(top.sort_values("rating"), x="rating", y="player", orientation="h",
+                     color="posicion", hover_data=["team", "minutesPlayed"],
+                     labels={"rating": "Rating", "player": ""}, title="Top 10 rating")
+        fig.update_layout(yaxis=dict(autorange="reversed"))
+        st.plotly_chart(fig, width="stretch")
+
+    g3, g4 = st.columns(2)
+    with g3:
+        fig = px.scatter(filtrado, x="goals", y="assists", color="posicion",
+                         size="minutesPlayed", hover_name="player", hover_data=["team", "rating"],
+                         labels={"goals": "Goles", "assists": "Asistencias"},
+                         title="Goles vs Asistencias")
+        st.plotly_chart(fig, width="stretch")
+    with g4:
+        fig = px.histogram(filtrado.dropna(subset=["Edad"]), x="Edad", nbins=20,
+                           color_discrete_sequence=["#0ea5e9"],
+                           labels={"Edad": "Edad"}, title="Distribución de edad")
+        st.plotly_chart(fig, width="stretch")
