@@ -51,7 +51,7 @@ def individual():
     df.to_csv("data/stats_15657909.csv", index=False)
 
 if __name__ == "__main__":
-    #    partidos()
+    partidos()
     individual()
 
 
